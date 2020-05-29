@@ -1,0 +1,253 @@
+############################################################################
+################## Completed Suicide Forecasts 2020-2021 ###################
+############################################################################
+# All rights reeserved (c) 2020 Jason Spedding.
+# jason.spedding@griffithuni.edu.au
+# 27/05/2020
+
+
+#install.packages('TSstudio')
+#install.packages('ggplot2')
+#install.packages('tseries')
+#install.packages('quantmod')
+#install.packages('forecast')
+#install.packages('fpp2')
+#install.packages("TSA")
+#install.packages('RCurl')
+#install.packages('readxl')
+
+library(RCurl)
+library(TSA)
+library(fpp2)
+library(forecast)
+library(quantmod)
+library(tseries)
+library(ggplot2)
+library(TSstudio)
+
+setwd('C:/Users/jason/OneDrive/Documents/RStudioWD')
+df.backup <- read.csv('v.04 AusSuicideTSdata.csv')
+
+df <- df.backup
+df$dv <- df$M.Total    
+df$dv2 <- df$F.Total 
+df$iv <- df$GDP
+df$iv2 <- df$MHSpend
+df$iv3 <- df$M.Unemploy
+df$iv4 <- df$F.Unemploy
+
+freq <- 1 # Seasonality.
+
+dv.label <- "Completed Suicide per 100 000"
+iv.label <- "Aus GDP Change %"
+iv2.label <- "Gov MH Spending per Individual"
+iv3.label <- "Male Unemployment Rate %"
+iv4.label <- "Female Unemployment Rate %"
+
+h <- 3 # Forecast Window (here 3 years).
+
+iv.predict <- c(1.8,-5.,-3.) #RBA GDP projections (https://www.rba.gov.au/publications/smp/2020/may/economic-outlook.html)
+iv2.predict <- c(266.64, 271.85,277.46) #values obtained via linear regression.
+iv3.predict <- c(5.2, 10., 8.5) #RBA Unemployment projections (https://www.rba.gov.au/publications/smp/2020/may/economic-outlook.html)
+iv4.predict <- c(5.2, 10., 8.5) #RBA Unemployment projections (https://www.rba.gov.au/publications/smp/2020/may/economic-outlook.html)
+
+############################################################################
+# transform into TS objects.
+df$date <- as.Date(df$ï..year, format = "%d/%m/%Y")
+
+ts.dv <- ts(na.omit(df$dv), start = c(1985,1,1), frequency = freq)
+ts.dv2 <- ts(na.omit(df$dv2), start = c(1985,1,1), frequency = freq)
+ts.iv <- ts(na.omit(df$iv), start = c(1985,1,1), frequency = freq)
+ts.iv2 <- ts(na.omit(df$iv2), start = c(1985,1,1), frequency = freq)
+ts.iv3 <- ts(na.omit(df$iv3), start = c(1985,1,1), frequency = freq)
+ts.iv4 <- ts(na.omit(df$iv4), start = c(1985,1,1), frequency = freq)
+ts.date <- ts(na.omit(df$date), start = c(1985,1,1), frequency = freq)
+
+# check missing.
+sum(is.na(df))
+
+############################################################################
+# tried to decompose but because freq = 1 theres no seasonality, had to use this to map trends:
+# https://stackoverflow.com/questions/45335193/stl-ts-frequency-1
+
+ts.df <- data.frame(date = seq(1985, 2018, 1), dv = c(df$dv), dv2 = c(df$dv2), iv = c(df$iv), iv2 =c(df$iv2), iv3 = c(df$iv3), iv4 =c(df$iv4))
+
+##############################################################################
+##### Test for stationary #####
+#adf.test(non.stationary, alternative = "stationary")
+adf.test(df$dv, alternative = "stationary")
+adf.test(df$dv2, alternative = "stationary")
+
+# level of trend stationary.
+kpss.test(df$dv)
+kpss.test(df$dv2)
+#a kpss H0 = stationary
+
+# Ljung-Box tests if lagged points are correlated, H0 = stationary.
+# tests observed autocorrelations against that expected from noise plots.
+Box.test(df$dv, lag = 12, type = "Ljung-Box")
+Box.test(df$dv2, lag = 12, type = "Ljung-Box")
+#a H0 = stationary.
+
+##############################################################################
+##### Test-Train Split #####
+train.ts.df <- as.ts(ts.df[1:31,], start = c(1985), frequency = freq)
+test.ts.df <- window(as.ts(ts.df), start = 32)
+
+# Split covariates
+train.ts.cov <- cbind(train.ts.df[,'iv'], train.ts.df[,'iv2'], train.ts.df[,'iv3'])
+test.ts.cov <- cbind(test.ts.df[,'iv'], test.ts.df[,'iv2'], test.ts.df[,'iv3'])
+full.ts.cov <- cbind(ts.df[,"iv"], ts.df[,"iv2"], ts.df[,"iv3"])
+
+train.ts.cov2 <- cbind(train.ts.df[,'iv'], train.ts.df[,'iv2'], train.ts.df[,'iv4'])
+test.ts.cov2 <- cbind(test.ts.df[,'iv'], test.ts.df[,'iv2'], test.ts.df[,'iv4'])
+full.ts.cov2 <- cbind(ts.df[,"iv"], ts.df[,"iv2"], ts.df[,"iv4"])
+
+fcast.ivs <- cbind(c(iv.predict), c(iv2.predict), c(iv3.predict))
+fcast.ivs2 <- cbind(c(iv.predict), c(iv2.predict), c(iv4.predict)) #note iv3 is replaced with iv4
+
+colnames(train.ts.cov)<- c("iv","iv2","iv3")
+colnames(test.ts.cov)<- c("iv","iv2","iv3")
+
+colnames(train.ts.cov2)<- c("iv","iv2","iv4")
+colnames(test.ts.cov2)<- c("iv","iv2","iv4")
+
+##### Fit some ARIMAX Models #####
+
+fit <- auto.arima(train.ts.df[,"dv"], xreg = train.ts.cov, ic = "aic", trace = TRUE)
+
+fit2 <- auto.arima(train.ts.df[,"dv2"], xreg = train.ts.cov2, ic = "aic", trace = TRUE)
+
+# Check residuals.
+c(fit[["aicc"]])
+c(fit2[["aicc"]])
+
+checkresiduals(fit)
+checkresiduals(fit2)
+
+fit.resid <- residuals(fit)
+fit.resid2 <- residuals(fit2)
+
+plot.ts(fit$residuals)
+plot.ts(fit2$residuals)
+
+Box.test(fit.resid, lag = 5, fitdf = 0)
+Box.test(fit.resid, lag = 5, fitdf = 0, type = "Lj")
+
+Box.test(fit.resid2, lag = 5, fitdf = 0)
+Box.test(fit.resid2, lag = 5, fitdf = 0, type = "Lj")
+#a both box-pierce and box-ljung tests are non-sig, implying these residuals 
+#a are not significantly different from white noise.
+
+##############################################################################
+##### Forecasts #####
+# it is important to remember ARIMAX assumes the X part is known, therefore
+# all predictions are predicated on the forecast IV values being accurate; 
+# values below are taken from the RBA projects following COVID pandemic.
+
+fcast.test <- forecast(fit, xreg=test.ts.cov, h = h)
+autoplot(fcast.test) + xlab("Year") +
+  ylab(dv.label)
+
+fcast.test2 <- forecast(fit2, xreg=test.ts.cov2, h = h)
+autoplot(fcast.test2) + xlab("Year") +
+  ylab(dv.label)
+
+# wanted to manually explore the lagged effect of GDP suicide rates
+# for more info see below
+# https://otexts.com/fpp2/lagged-predictors.html
+
+#iv.lags <- as.ts(cbind(
+#  lag0 = train.ts.df[,"iv"],
+#  lag1 = stats::lag(train.ts.df[,"iv"],-1),
+#  lag2 = stats::lag(train.ts.df[,"iv"],-2),
+#  lag3 = stats::lag(train.ts.df[,"iv"],-3),
+#  lag4 = stats::lag(train.ts.df[,"iv"],-4),
+#  lag5 = stats::lag(train.ts.df[,"iv"],-5),
+#  lag6 = stats::lag(train.ts.df[,"iv"],-6),
+#  lag7 = stats::lag(train.ts.df[,"iv"],-7)) %>%
+#    head(NROW(train.ts.df)))
+
+#fit.lag0 <- auto.arima(train.ts.df[,"dv"], xreg = iv.lags[,1], stationary = TRUE)
+#fit.lag1 <- auto.arima(train.ts.df[,"dv"], xreg = iv.lags[,1:2], stationary = TRUE)
+#fit.lag2 <- auto.arima(train.ts.df[,"dv"], xreg = iv.lags[,1:3], stationary = TRUE)
+#fit.lag3 <- auto.arima(train.ts.df[,"dv"], xreg = iv.lags[,1:4], stationary = TRUE)
+#fit.lag4 <- auto.arima(train.ts.df[,"dv"], xreg = iv.lags[,1:5], stationary = TRUE)
+#fit.lag5 <- auto.arima(train.ts.df[,"dv"], xreg = iv.lags[,1:6], stationary = TRUE)
+#fit.lag6 <- auto.arima(train.ts.df[,"dv"], xreg = iv.lags[,1:7], stationary = TRUE)
+
+
+#c(fit.lag0[["aicc"]],fit.lag1[["aicc"]],fit.lag2[["aicc"]],fit.lag3[["aicc"]],
+#  fit.lag4[["aicc"]],fit.lag5[["aicc"]],fit.lag6[["aicc"]])
+
+#fcast.lag5 <- forecast(fit.lag5, h = h, xreg = cbind(lag0 = as.numeric(test.ts.df[, 'iv']),
+#                                                     lag1 = c(train.ts.df[31,'iv'], test.ts.df[1:2, "iv"]),
+#                                                     lag2 = c(train.ts.df[30:31,'iv'], test.ts.df[1, "iv"]),
+#                                                     lag3 = c(train.ts.df[29:31,'iv']), 
+#                                                     lag4 = c(train.ts.df[28:30,'iv']), 
+#                                                     lag5 = train.ts.df[27:29,'iv']))
+
+#a the fancy lagged model wasn't really better than the non-lagged, therefore the simplier model was retained.
+
+fcast.test <- forecast(fcast.test, xreg=test.ts.cov, h = h)
+
+temp.dv.values <- as.ts(c(rep('NA', 31), test.ts.df[,'dv']))
+autoplot(fcast.test) + xlab("Year") + ylab(dv.label) + autolayer(temp.dv.values) +autolayer(fcast.test$fitted)
+
+accuracy(fcast.test$fitted, train.ts.df[,'dv'])
+accuracy(fcast.test$mean, test.ts.df[,'dv'])
+
+fcast.test2 <- forecast(fcast.test2, xreg=test.ts.cov2, h = h)
+
+temp.dv.values2 <- as.ts(c(rep('NA', 31), test.ts.df[,'dv2']))
+autoplot(fcast.test2) + xlab("Year") + ylab(dv.label) + autolayer(temp.dv.values2) +autolayer(fcast.test2$fitted)
+
+accuracy(fcast.test2$fitted, train.ts.df[,'dv2'])
+accuracy(fcast.test2$mean, test.ts.df[,'dv2'])
+
+##### Forecasting only 3 years into the future gives a more accurate model (compared to 5 year forecasts).
+# Retrain model on all data.
+
+full.model <- Arima(ts.df[,'dv'], xreg = full.ts.cov, order = c(1,0,0)) #Note the capital A on Arima!!!!!
+
+full.model2 <- Arima(ts.df[,'dv2'], xreg = full.ts.cov2, order = c(1,0,0)) #Note the capital A on Arima!!!!!
+
+fcast.full.model <- forecast(full.model, h = 3, xreg = fcast.ivs)
+
+fcast.full.model2 <- forecast(full.model2, h = 3, xreg = fcast.ivs2)
+
+plot(fcast.full.model)
+autoplot(fcast.full.model) + xlab("Year") + ylab(dv.label) + autolayer(fcast.full.model$fitted)
+
+plot(fcast.full.model2)
+autoplot(fcast.full.model2) + xlab("Year") + ylab(dv.label) + autolayer(fcast.full.model2$fitted)
+
+##### GGPlot Time #####
+
+plot.df <- as.data.frame(cbind(c(ts.df$date, 2019, 2020, 2021), 
+                               c(ts.df$dv, NA, NA, NA), 
+                               c(fcast.full.model$fitted, fcast.full.model$mean),
+                               c(ts.df$dv2, NA, NA, NA), 
+                               c(fcast.full.model2$fitted, fcast.full.model2$mean), 
+                               c(rep(NA, 33), fcast.full.model$fitted[34], fcast.full.model$upper[,2]), 
+                               c(rep(NA, 33), fcast.full.model$fitted[34], fcast.full.model$lower[,2]), 
+                               c(rep(NA, 33), fcast.full.model2$fitted[34], fcast.full.model2$upper[,2]), 
+                               c(rep(NA, 33), fcast.full.model2$fitted[34], fcast.full.model2$lower[,2])))
+
+colnames(plot.df)<- c("date","dv","pred.dv", "dv2", "pred.dv2", "dv.U95", "dv.L95", "dv2.U95", "dv2.L95")
+
+
+ggplot(plot.df, aes(x = date)) + 
+  geom_line(aes(y = dv, color = "Male Reported Rates"), size = 1) +
+  geom_line(aes(y = pred.dv, color = "Predicted Values"), linetype = 'dashed', size = 1) +
+  geom_line(aes(y = dv.U95, color = "95%CI"), linetype = 'solid', size = .5, alpha = .75) +
+  geom_line(aes(y = dv.L95, color = "95%CI"), linetype = 'solid', size = .5, alpha = .75) +
+  xlab("Year") + ylab(dv.label) + scale_y_continuous(limits = c(0, 32)) + 
+  theme_bw() +
+  geom_line(aes(y = dv2, color = "Female Reported Rates"), size = 1) +
+  geom_line(aes(y = pred.dv2, color = "Predicted Values"), linetype = 'dashed', size = 1) +
+  geom_line(aes(y = dv2.U95, color = "95%CI"), linetype = 'solid', size = .5, alpha = .75) +
+  geom_line(aes(y = dv2.L95, color = "95%CI"), linetype = 'solid', size = .5, alpha = .75) +
+  scale_colour_manual("", breaks = c("Male Reported Rates", "Predicted Values", "95%CI", " ", "Female Reported Rates", "Predicted Values", " ", " "),
+                      values = c("Male Reported Rates"="hot pink", "Predicted Values"="blue", "95%CI"="light blue", " "="blue", "Female Reported Rates"="purple1",
+                                 "Predicted Values"="blue", " "="blue", " "="blue"))
